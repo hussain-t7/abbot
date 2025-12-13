@@ -67,7 +67,7 @@ class _InvoicePageState extends State<InvoicePage> {
       if (mounted) {
         setState(() {
           customer = c;
-          trades = t ?? [];
+          trades = t;
           loading = false;
         });
 

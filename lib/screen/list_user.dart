@@ -43,7 +43,7 @@ class _CustomerListScreenState extends State<CustomerListScreen> {
 
   Future<void> _editCustomer(Map<String, dynamic> customer) async {
     // Navigate to customer form with customer data
-    final result = await Navigator.push(
+    await Navigator.push(
       context,
       MaterialPageRoute(
         builder: (context) => AddUserScreen(),

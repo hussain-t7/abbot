@@ -94,8 +94,6 @@ class InvoicePdf {
       // Colors from screenshot
       final PdfColor headerCream = PdfColor.fromHex("#EFE7DA");
       final PdfColor subtleBorder = PdfColor.fromHex("#E0E0E0");
-      final PdfColor darkBlue = PdfColor.fromHex("#1A57E8");
-      final PdfColor greyText = PdfColor.fromHex("#7A7A7A");
 
       // Number formatter
       final numF = NumberFormat("#,##0.00");
