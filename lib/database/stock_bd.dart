@@ -50,9 +50,57 @@ class TradeExitDB {
   Future _onUpgrade(Database db, int oldVersion, int newVersion) async {
     if (oldVersion < 2) {
       // Add new columns for buy_brokerage and sell_brokerage
-      await db.execute('ALTER TABLE trade_exit ADD COLUMN buy_brokerage REAL DEFAULT 0');
-      await db.execute('ALTER TABLE trade_exit ADD COLUMN sell_brokerage REAL DEFAULT 0');
+      await db.execute(
+        'ALTER TABLE trade_exit ADD COLUMN buy_brokerage REAL DEFAULT 0',
+      );
+      await db.execute(
+        'ALTER TABLE trade_exit ADD COLUMN sell_brokerage REAL DEFAULT 0',
+      );
     }
+  }
+
+  // Helper method to parse date string (dd/MM/yyyy) to DateTime
+  DateTime? _parseDate(String dateStr) {
+    try {
+      final dateFormat = DateFormat("dd/MM/yyyy");
+      return dateFormat.parse(dateStr);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Helper method to check if date is within current week (Monday to Sunday)
+  bool _isDateInCurrentWeek(DateTime date) {
+    final now = DateTime.now();
+
+    // Calculate current week's Monday (start of current week)
+    int daysFromMonday = (now.weekday - 1) % 7;
+    DateTime currentMonday = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).subtract(Duration(days: daysFromMonday));
+
+    // Calculate current week's Sunday (end of current week)
+    DateTime currentSunday = currentMonday.add(const Duration(days: 6));
+
+    // Normalize dates to compare only date part
+    final dateOnly = DateTime(date.year, date.month, date.day);
+    final monOnly = DateTime(
+      currentMonday.year,
+      currentMonday.month,
+      currentMonday.day,
+    );
+    final sunOnly = DateTime(
+      currentSunday.year,
+      currentSunday.month,
+      currentSunday.day,
+    );
+
+    // Check if date is within current week (inclusive) - FIXED for proper boundary check
+    return (dateOnly.isAtSameMomentAs(monOnly) || dateOnly.isAfter(monOnly)) &&
+        (dateOnly.isAtSameMomentAs(sunOnly) ||
+            dateOnly.isBefore(sunOnly.add(const Duration(days: 1))));
   }
 
   // INSERT ROW
@@ -61,14 +109,31 @@ class TradeExitDB {
       final database = await instance.db;
 
       // Validate required fields
-      if (data["customer_id"] == null || data["customer_id"].toString().trim().isEmpty) {
+      if (data["customer_id"] == null ||
+          data["customer_id"].toString().trim().isEmpty) {
         throw Exception("Customer ID is required");
       }
-      if (data["share_name"] == null || data["share_name"].toString().trim().isEmpty) {
+      if (data["share_name"] == null ||
+          data["share_name"].toString().trim().isEmpty) {
         throw Exception("Share name is required");
       }
-      if (data["exit_date"] == null || data["exit_date"].toString().trim().isEmpty) {
+      if (data["exit_date"] == null ||
+          data["exit_date"].toString().trim().isEmpty) {
         throw Exception("Exit date is required");
+      }
+
+      // Validate date format
+      final exitDateStr = data["exit_date"].toString().trim();
+      final exitDate = _parseDate(exitDateStr);
+      if (exitDate == null) {
+        throw Exception("Invalid date format. Expected dd/MM/yyyy");
+      }
+
+      // Check if date is in current week - only allow current week data
+      if (!_isDateInCurrentWeek(exitDate)) {
+        throw Exception(
+          "Only current week's data can be stored. Please enter a date from this week (Monday to Sunday).",
+        );
       }
 
       // Always save customer_id as TEXT
@@ -76,13 +141,13 @@ class TradeExitDB {
 
       // Insert record
       final result = await database.insert("trade_exit", data);
-      
+
       // Auto-cleanup: Remove previous week's data when Monday arrives (non-blocking)
       _cleanupWeeklyRecords().catchError((error) {
         // Log error but don't fail the insert
         print("Warning: Weekly cleanup failed: $error");
       });
-      
+
       return result;
     } catch (e) {
       throw Exception("Failed to insert trade record: $e");
@@ -94,7 +159,7 @@ class TradeExitDB {
     try {
       final database = await instance.db;
       final now = DateTime.now();
-      
+
       // Only cleanup on Monday
       if (now.weekday != DateTime.monday) {
         return;
@@ -102,13 +167,16 @@ class TradeExitDB {
 
       // Calculate current week's Monday (start of current week)
       int daysFromMonday = (now.weekday - 1) % 7;
-      DateTime currentMonday = DateTime(now.year, now.month, now.day)
-          .subtract(Duration(days: daysFromMonday));
-      
+      DateTime currentMonday = DateTime(
+        now.year,
+        now.month,
+        now.day,
+      ).subtract(Duration(days: daysFromMonday));
+
       // Calculate previous week's Monday and Sunday
       DateTime previousMonday = currentMonday.subtract(const Duration(days: 7));
       DateTime previousSunday = previousMonday.add(const Duration(days: 6));
-      
+
       // Format dates for comparison (dd/MM/yyyy)
       final dateFormat = DateFormat("dd/MM/yyyy");
       String previousMondayStr = dateFormat.format(previousMonday);
@@ -123,32 +191,48 @@ class TradeExitDB {
       }
 
       final List<int> idsToDelete = [];
-      
+
       for (var record in allRecords) {
         final exitDateStr = record["exit_date"]?.toString() ?? "";
         if (exitDateStr.isEmpty) continue;
-        
-        try {
-          final exitDateParsed = dateFormat.parse(exitDateStr);
-          // Normalize to date only (remove time component)
-          final exitDate = DateTime(exitDateParsed.year, exitDateParsed.month, exitDateParsed.day);
-          final prevMon = DateTime(previousMonday.year, previousMonday.month, previousMonday.day);
-          final prevSun = DateTime(previousSunday.year, previousSunday.month, previousSunday.day);
-          
-          // Check if date falls within previous week (Monday to Sunday inclusive)
-          if (exitDate.isAfter(prevMon.subtract(const Duration(days: 1))) &&
-              exitDate.isBefore(prevSun.add(const Duration(days: 1)))) {
-            final id = record["id"];
-            if (id != null && id is int) {
-              idsToDelete.add(id);
-            }
+
+        final exitDate = _parseDate(exitDateStr);
+        if (exitDate == null) {
+          print(
+            "Warning: Invalid date format for record ${record["id"]}: $exitDateStr",
+          );
+          continue;
+        }
+
+        // Normalize to date only (remove time component)
+        final exitDateOnly = DateTime(
+          exitDate.year,
+          exitDate.month,
+          exitDate.day,
+        );
+        final prevMonOnly = DateTime(
+          previousMonday.year,
+          previousMonday.month,
+          previousMonday.day,
+        );
+        final prevSunOnly = DateTime(
+          previousSunday.year,
+          previousSunday.month,
+          previousSunday.day,
+        );
+
+        // Check if date falls within previous week (Monday to Sunday inclusive)
+        if ((exitDateOnly.isAtSameMomentAs(prevMonOnly) ||
+                exitDateOnly.isAfter(prevMonOnly)) &&
+            (exitDateOnly.isAtSameMomentAs(prevSunOnly) ||
+                exitDateOnly.isBefore(prevSunOnly))) {
+          final id = record["id"];
+          if (id != null && id is int) {
+            idsToDelete.add(id);
           }
-        } catch (e) {
-          // Skip records with invalid date format
-          print("Warning: Invalid date format for record ${record["id"]}: $exitDateStr");
         }
       }
-      
+
       // Delete all records in batch
       if (idsToDelete.isNotEmpty) {
         try {
@@ -158,7 +242,9 @@ class TradeExitDB {
             where: "id IN ($placeholders)",
             whereArgs: idsToDelete,
           );
-          print("Cleaned up $deletedCount records from previous week ($previousMondayStr to $previousSundayStr)");
+          print(
+            "Cleaned up $deletedCount records from previous week ($previousMondayStr to $previousSundayStr)",
+          );
         } catch (e) {
           throw Exception("Failed to delete old records: $e");
         }
@@ -180,23 +266,114 @@ class TradeExitDB {
   }
 
   // -------------------------
-  // FIXED: LAST 7 DAYS TRADES
+  // NEW: GET CURRENT WEEK'S STOCK DATA (ISSUE STOCK)
+  // -------------------------
+  Future<List<Map<String, dynamic>>> getCurrentWeekStock() async {
+    final database = await instance.db;
+
+    // Get all records
+    final allRecords = await database.query(
+      "trade_exit",
+      orderBy: "exit_date DESC",
+    );
+
+    // Filter records that belong to current week
+    final List<Map<String, dynamic>> currentWeekRecords = [];
+
+    for (var record in allRecords) {
+      final exitDateStr = record["exit_date"]?.toString() ?? "";
+      if (exitDateStr.isEmpty) continue;
+
+      final exitDate = _parseDate(exitDateStr);
+      if (exitDate != null && _isDateInCurrentWeek(exitDate)) {
+        currentWeekRecords.add(record);
+      }
+    }
+
+    return currentWeekRecords;
+  }
+
+  // -------------------------
+  // NEW: GET CURRENT WEEK'S STOCK DATA BY CUSTOMER
+  // -------------------------
+  Future<List<Map<String, dynamic>>> getCurrentWeekStockByCustomer(
+    String customerId,
+  ) async {
+    final database = await instance.db;
+
+    // Get all records for this customer
+    final allRecords = await database.query(
+      "trade_exit",
+      where: "customer_id = ?",
+      whereArgs: [customerId.trim()],
+      orderBy: "exit_date DESC",
+    );
+
+    // Filter records that belong to current week
+    final List<Map<String, dynamic>> currentWeekRecords = [];
+
+    for (var record in allRecords) {
+      final exitDateStr = record["exit_date"]?.toString() ?? "";
+      if (exitDateStr.isEmpty) continue;
+
+      final exitDate = _parseDate(exitDateStr);
+      if (exitDate != null && _isDateInCurrentWeek(exitDate)) {
+        currentWeekRecords.add(record);
+      }
+    }
+
+    return currentWeekRecords;
+  }
+
+  // -------------------------
+  // FIXED: LAST 7 DAYS TRADES (Using proper date comparison)
   // -------------------------
   Future<List<Map<String, dynamic>>> getLast7DaysTrades(
     String customerId,
   ) async {
     final database = await instance.db;
 
-    final sevenDaysAgo = DateFormat(
-      "dd/MM/yyyy",
-    ).format(DateTime.now().subtract(const Duration(days: 7)));
+    // Calculate 7 days ago date
+    final sevenDaysAgo = DateTime.now().subtract(const Duration(days: 7));
 
-    return await database.query(
+    // Get all records for this customer
+    final allRecords = await database.query(
       "trade_exit",
-      where: "customer_id = ? AND exit_date >= ?",
-      whereArgs: [customerId.trim(), sevenDaysAgo],
+      where: "customer_id = ?",
+      whereArgs: [customerId.trim()],
       orderBy: "exit_date DESC",
     );
+
+    // Filter records that are within last 7 days using proper date comparison
+    final List<Map<String, dynamic>> filteredRecords = [];
+
+    for (var record in allRecords) {
+      final exitDateStr = record["exit_date"]?.toString() ?? "";
+      if (exitDateStr.isEmpty) continue;
+
+      final exitDate = _parseDate(exitDateStr);
+      if (exitDate != null) {
+        // Normalize dates for comparison
+        final exitDateOnly = DateTime(
+          exitDate.year,
+          exitDate.month,
+          exitDate.day,
+        );
+        final sevenDaysAgoOnly = DateTime(
+          sevenDaysAgo.year,
+          sevenDaysAgo.month,
+          sevenDaysAgo.day,
+        );
+
+        // Check if exit date is >= 7 days ago
+        if (exitDateOnly.isAtSameMomentAs(sevenDaysAgoOnly) ||
+            exitDateOnly.isAfter(sevenDaysAgoOnly)) {
+          filteredRecords.add(record);
+        }
+      }
+    }
+
+    return filteredRecords;
   }
 
   // -------------------------

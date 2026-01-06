@@ -717,27 +717,53 @@ class InvoicePdf {
     int orderNumber,
   ) {
     try {
-      // Date normalization - safe parsing
+      // Date normalization - safe parsing with proper dd/MM/yyyy handling
       String dateStr = "";
       try {
         final dateValue = trade["exit_date"];
         if (dateValue != null) {
           dateStr = dateValue.toString().trim();
           if (dateStr.isNotEmpty) {
-            // if stored dd/MM/yyyy already - use as-is (take first 10)
+            // Check if already in dd/MM/yyyy format
             if (dateStr.contains('/') && dateStr.length >= 10) {
-              dateStr = dateStr.substring(0, 10);
+              // Validate it's actually dd/MM/yyyy format
+              final parts = dateStr.split('/');
+              if (parts.length == 3 && 
+                  parts[0].length == 2 && 
+                  parts[1].length == 2 && 
+                  parts[2].length == 4) {
+                // Valid dd/MM/yyyy format, use as-is
+                dateStr = dateStr.substring(0, 10);
+              } else {
+                // Try to parse and reformat
+                try {
+                  final dateFormat = DateFormat("dd/MM/yyyy");
+                  final dt = dateFormat.parse(dateStr);
+                  dateStr = dateFormat.format(dt);
+                } catch (_) {
+                  // If parsing fails, try substring
+                  dateStr = dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr;
+                }
+              }
             } else if (dateStr.length >= 10) {
+              // Try parsing as ISO format or other formats
               try {
                 final dt = DateTime.tryParse(dateStr.substring(0, 10));
                 if (dt != null) {
                   dateStr = DateFormat("dd/MM/yyyy").format(dt);
+                } else {
+                  // If DateTime parsing fails, try direct DateFormat parsing
+                  try {
+                    final dateFormat = DateFormat("dd/MM/yyyy");
+                    final dt = dateFormat.parse(dateStr);
+                    dateStr = dateFormat.format(dt);
+                  } catch (_) {
+                    dateStr = dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr;
+                  }
                 }
               } catch (_) {
-                // Keep original date string if parsing fails
-                dateStr = dateStr.length >= 10
-                    ? dateStr.substring(0, 10)
-                    : dateStr;
+                // Keep original date string if all parsing fails
+                dateStr = dateStr.length >= 10 ? dateStr.substring(0, 10) : dateStr;
               }
             }
           }

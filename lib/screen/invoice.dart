@@ -399,7 +399,29 @@ class _InvoicePageState extends State<InvoicePage> {
 
   String _formatDate(dynamic raw) {
     if (raw == null) return "";
-    final s = raw.toString();
+    final s = raw.toString().trim();
+    
+    // If already in dd/MM/yyyy format, return as-is
+    if (s.contains('/') && s.length >= 10) {
+      final parts = s.split('/');
+      if (parts.length == 3 && 
+          parts[0].length == 2 && 
+          parts[1].length == 2 && 
+          parts[2].length == 4) {
+        return s.length >= 10 ? s.substring(0, 10) : s;
+      }
+    }
+    
+    // Try to parse and format if it's a different format
+    try {
+      final dt = DateTime.tryParse(s);
+      if (dt != null) {
+        return DateFormat("dd/MM/yyyy").format(dt);
+      }
+    } catch (_) {
+      // If parsing fails, return truncated string
+    }
+    
     return s.length >= 10 ? s.substring(0, 10) : s;
   }
 
